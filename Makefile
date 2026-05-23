@@ -80,11 +80,21 @@ KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 OS_IMAGE  := $(BUILD_DIR)/vesper.img
 
 # -----------------------------------------------------------------------------
+# Userland
+# -----------------------------------------------------------------------------
+USERLAND_DIR  := userland
+USERLAND_BUILD := $(USERLAND_DIR)/build
+
+# -----------------------------------------------------------------------------
 # Phony targets
 # -----------------------------------------------------------------------------
-.PHONY: all run clean
+.PHONY: all run clean userland
 
 all: $(OS_IMAGE)
+
+# Build userland ELF binaries
+userland:
+	$(MAKE) -C $(USERLAND_DIR)
 
 # Launch in QEMU using the raw disk image
 run: $(OS_IMAGE)
@@ -97,6 +107,7 @@ run-debug: $(OS_IMAGE)
 
 clean:
 	rm -rf $(BUILD_DIR)
+	$(MAKE) -C $(USERLAND_DIR) clean
 
 # -----------------------------------------------------------------------------
 # Disk image assembly

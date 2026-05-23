@@ -2,6 +2,8 @@
 
 A minimal educational operating system built from scratch using Assembly, C, and QEMU.
 
+[![Build](https://github.com/DANIELKILONZI/Vesper-OS/actions/workflows/build.yml/badge.svg)](https://github.com/DANIELKILONZI/Vesper-OS/actions/workflows/build.yml)
+
 ## Boot Flow
 
 ```
@@ -28,9 +30,34 @@ Vesper-OS/
 │   ├── isr.c / .h        # registers_t, C dispatcher, IRQ handler table
 │   ├── keyboard.c / .h   # Interrupt-driven PS/2 keyboard (IRQ1, ring buffer)
 │   ├── kmem.c / .h       # First-fit heap allocator (256 KB)
-│   └── shell.c / .h      # Interactive command shell
+│   ├── shell.c / .h      # Interactive command shell
+│   ├── pmm.c / .h        # Bitmap physical memory manager
+│   ├── paging.c / .h     # x86 two-level page tables, per-process PDs
+│   ├── process.c / .h    # Preemptive round-robin scheduler
+│   ├── syscall.c / .h    # INT 0x80 syscall interface (13 syscalls)
+│   ├── ata.c / .h        # ATA PIO disk driver
+│   ├── fs.c / .h         # VesperFS flat filesystem
+│   ├── elf.c / .h        # ELF32 loader (kernel + user-mode)
+│   ├── pipe.c / .h       # IPC ring-buffer pipes
+│   ├── fd.c / .h         # Global file descriptor table
+│   ├── rtc.c / .h        # CMOS real-time clock
+│   ├── timer.c / .h      # PIT timer (100 Hz)
+│   ├── serial.c / .h     # COM1 serial output
+│   ├── gdt.c / .h        # Global Descriptor Table
+│   └── tss.c / .h        # Task State Segment
+├── userland/
+│   ├── libc/
+│   │   ├── vesper.h      # User-space C library header (syscall wrappers)
+│   │   ├── vesper.c      # Syscall implementations (INT 0x80)
+│   │   └── start.asm     # CRT0 entry point (_start → main → exit)
+│   ├── programs/
+│   │   ├── hello.c       # Hello world (demonstrates write, getpid, sleep)
+│   │   ├── fibonacci.c   # Fibonacci sequence computation
+│   │   └── pipe_demo.c   # IPC pipe demonstration
+│   ├── link.ld           # User-space linker script (base = 0x01000000)
+│   └── Makefile          # Userland build system
 ├── linker.ld             # Kernel linker script (base = 0x1000)
-├── Makefile              # Build system
+├── Makefile              # Root build system
 └── README.md
 ```
 
@@ -92,7 +119,20 @@ qemu-system-i386 -drive format=raw,file=build/vesper.img,index=0,media=disk -m 3
 | `clear`        | Clear the screen                    |
 | `echo <text>`  | Print text to the screen            |
 | `version`      | Show OS version information         |
-| `meminfo`      | Show heap memory statistics         |
+| `meminfo`      | Show heap + physical memory stats   |
+| `uptime`       | Show system uptime                  |
+| `date`         | Show current date/time (RTC)        |
+| `ps`           | List running processes              |
+| `kill <pid>`   | Terminate a process by PID          |
+| `sleep <ms>`   | Sleep for N milliseconds            |
+| `colortest`    | Display all 16 VGA colours          |
+| `mkfs`         | Format the VesperFS partition       |
+| `ls`           | List files in VesperFS              |
+| `cat <file>`   | Print file contents                 |
+| `write <f> <t>`| Write text to a file                |
+| `rm <file>`    | Delete a file from VesperFS         |
+| `run <file>`   | Load ELF32 as kernel thread         |
+| `exec <file>`  | Load ELF32 as ring-3 user process   |
 | `halt`         | Halt the CPU                        |
 | `reboot`       | Reboot the system                   |
 
@@ -161,3 +201,56 @@ reason tagging — only keyboard-waiting processes are woken on keypress.
 | 0            | Boot sector (512 B)             |
 | 1–128        | Kernel binary (64 KB budget)    |
 | 129–8191     | VesperFS partition (~4 MB)      |
+
+## Writing User Programs
+
+User programs are built as ELF32 executables linked at `0x01000000` and run
+in ring 3 (user mode) with their own page directory.
+
+### Quick start
+
+```c
+#include "../libc/vesper.h"
+
+int main(void)
+{
+    puts("Hello from user space!\n");
+    puts("My PID is: ");
+    print_uint(getpid());
+    puts("\n");
+    return 0;
+}
+```
+
+### Building
+
+```bash
+cd userland
+make
+```
+
+This produces ELF binaries in `userland/build/` (e.g., `hello.elf`).
+
+### Running in Vesper OS
+
+1. Write the ELF to the VesperFS filesystem (via QEMU or a host tool).
+2. In the Vesper shell: `exec hello.elf`
+
+### Available syscalls (via `vesper.h`)
+
+| Function | Description |
+|----------|-------------|
+| `exit(code)` | Terminate process |
+| `write(buf, len)` | Write to VGA console |
+| `getpid()` | Get current PID |
+| `sleep(ms)` | Sleep N milliseconds |
+| `yield()` | Yield CPU |
+| `kill(pid)` | Kill process |
+| `open(name)` | Open file, returns fd |
+| `read(fd, buf, len)` | Read from fd |
+| `close(fd)` | Close fd |
+| `gettime()` | Seconds since midnight |
+| `pipe_create()` | Create IPC pipe |
+| `pipe_write(id, data, len)` | Write to pipe |
+| `pipe_read(id, buf, len)` | Read from pipe |
+

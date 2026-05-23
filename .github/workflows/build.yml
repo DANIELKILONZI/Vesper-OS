@@ -1,0 +1,57 @@
+# =============================================================================
+# Vesper OS – CI Build Workflow
+# =============================================================================
+# Builds the kernel and userland on every push/PR to verify nothing is broken.
+# Uses Ubuntu with nasm + gcc-multilib (same as local development).
+# =============================================================================
+
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm gcc-multilib make
+
+      - name: Build kernel
+        run: make
+
+      - name: Build userland
+        run: make -C userland
+
+      - name: Verify disk image exists
+        run: |
+          test -f build/vesper.img && echo "✓ build/vesper.img created successfully"
+          ls -lh build/vesper.img
+
+      - name: Verify userland ELFs exist
+        run: |
+          for elf in userland/build/*.elf; do
+            echo "✓ $(basename $elf)"
+            file "$elf"
+          done
+
+      - name: Upload disk image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vesper-img
+          path: build/vesper.img
+
+      - name: Upload userland binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: userland-elfs
+          path: userland/build/*.elf
