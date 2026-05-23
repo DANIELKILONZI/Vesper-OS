@@ -80,11 +80,21 @@ KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 OS_IMAGE  := $(BUILD_DIR)/vesper.img
 
 # -----------------------------------------------------------------------------
+# Userland
+# -----------------------------------------------------------------------------
+USERLAND_DIR  := userland
+USERLAND_BUILD := $(USERLAND_DIR)/build
+
+# -----------------------------------------------------------------------------
 # Phony targets
 # -----------------------------------------------------------------------------
-.PHONY: all run clean
+.PHONY: all run clean userland
 
 all: $(OS_IMAGE)
+
+# Build userland ELF binaries
+userland:
+	$(MAKE) -C $(USERLAND_DIR)
 
 # Launch in QEMU using the raw disk image
 run: $(OS_IMAGE)
@@ -97,14 +107,15 @@ run-debug: $(OS_IMAGE)
 
 clean:
 	rm -rf $(BUILD_DIR)
+	$(MAKE) -C $(USERLAND_DIR) clean
 
 # -----------------------------------------------------------------------------
 # Disk image assembly
 #
-#  1. Create a blank 1.44 MB floppy-sized image (2880 × 512-byte sectors).
-#  2. Write the 512-byte boot sector to sector 0 (LBA 0  =  CHS 0/0/1).
-#  3. Write the kernel binary starting at sector 1 (LBA 1  =  CHS 0/0/2),
-#     which is where the bootloader's INT 13h call reads from (CL=2).
+#  1. Create a blank 4 MB disk image (8192 × 512-byte sectors).
+#  2. Write the 512-byte boot sector to sector 0 (LBA 0).
+#  3. Write the kernel binary starting at sector 1 (LBA 1),
+#     which is where the bootloader loads from.
 # -----------------------------------------------------------------------------
 $(OS_IMAGE): $(BOOT_BIN) $(KERNEL_BIN) | $(BUILD_DIR)
 	@echo "[IMG]  $@"

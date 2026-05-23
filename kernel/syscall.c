@@ -13,6 +13,64 @@
 /* Forward declaration of the ASM stub defined in isr.asm */
 extern void isr_syscall(void);
 
+/* -------------------------------------------------------------------------
+ * User pointer validation
+ *
+ * Kernel-mode threads (is_user == 0) can pass any pointer.  User-mode
+ * processes must only pass addresses within the user address space
+ * (USER_ADDR_LOW … USER_ADDR_HIGH) to prevent ring-3 code from tricking
+ * the kernel into reading/writing arbitrary kernel memory.
+ * ---------------------------------------------------------------------- */
+#define USER_ADDR_LOW   0x01000000u   /* USER_LOAD_BASE (from elf.h) */
+#define USER_ADDR_HIGH  0x01020000u   /* USER_STACK_TOP (from elf.h) */
+
+/*
+ * validate_user_ptr – check that a user-mode buffer [ptr, ptr+len) lies
+ * entirely within the valid user address range.
+ * Returns 1 if valid, 0 if the pointer is outside the user space.
+ * Kernel threads always pass validation (they share the flat address space).
+ */
+static int validate_user_ptr(const void *ptr, uint32_t len)
+{
+    if (!current_process || !current_process->is_user) {
+        return 1;   /* kernel threads can address anything */
+    }
+    uint32_t start = (uint32_t)(uintptr_t)ptr;
+    uint32_t end   = start + len;
+    /* Overflow check + range check */
+    if (end < start || start < USER_ADDR_LOW || end > USER_ADDR_HIGH) {
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * validate_user_string – check that a NUL-terminated user string starts
+ * within user space.  Limits scan to max_len bytes.
+ * Returns 1 if valid, 0 otherwise.
+ */
+static int validate_user_string(const char *str, uint32_t max_len)
+{
+    if (!current_process || !current_process->is_user) {
+        return 1;
+    }
+    uint32_t addr = (uint32_t)(uintptr_t)str;
+    if (addr < USER_ADDR_LOW || addr >= USER_ADDR_HIGH) {
+        return 0;
+    }
+    /* Ensure at least one byte and NUL terminator within bounds */
+    uint32_t avail = USER_ADDR_HIGH - addr;
+    if (avail > max_len) {
+        avail = max_len;
+    }
+    for (uint32_t i = 0; i < avail; i++) {
+        if (str[i] == '\0') {
+            return 1;
+        }
+    }
+    return 0;   /* no NUL within valid range */
+}
+
 void syscall_init(void)
 {
     idt_set_gate(0x80u, (uint32_t)isr_syscall, 0x08u, IDT_SYSCALL_GATE);
@@ -58,6 +116,10 @@ void syscall_handler(registers_t *regs)
         {
             const char *buf = (const char *)(uintptr_t)ebx;
             uint32_t    len = ecx;
+            if (!validate_user_ptr(buf, len)) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
             for (uint32_t i = 0; i < len; i++) {
                 vga_putchar(buf[i]);
             }
@@ -100,6 +162,10 @@ void syscall_handler(registers_t *regs)
          */
         {
             const char *name = (const char *)(uintptr_t)ebx;
+            if (!validate_user_string(name, 256u)) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
             uint32_t    pid  = current_process ? current_process->pid : 0u;
             regs->eax = (uint32_t)fd_open(name, pid);
         }
@@ -116,6 +182,10 @@ void syscall_handler(registers_t *regs)
             int      fd  = (int)ebx;
             uint32_t len = ecx;
             void    *buf = (void *)(uintptr_t)edx;
+            if (!validate_user_ptr(buf, len)) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
             uint32_t pid = current_process ? current_process->pid : 0u;
             regs->eax = (uint32_t)fd_read(fd, buf, len, pid);
         }
@@ -161,6 +231,10 @@ void syscall_handler(registers_t *regs)
         {
             int         pipe_id = (int)ebx;
             const void *buf     = (const void *)(uintptr_t)edx;
+            if (!validate_user_ptr(buf, ecx)) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
             regs->eax = (uint32_t)pipe_write(pipe_id, buf, ecx);
         }
         break;
@@ -175,6 +249,10 @@ void syscall_handler(registers_t *regs)
         {
             int   pipe_id = (int)ebx;
             void *buf     = (void *)(uintptr_t)edx;
+            if (!validate_user_ptr(buf, ecx)) {
+                regs->eax = (uint32_t)-1;
+                break;
+            }
             regs->eax = (uint32_t)pipe_read(pipe_id, buf, ecx);
         }
         break;

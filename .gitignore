@@ -1,5 +1,6 @@
 # Build artefacts
 build/
+userland/build/
 
 # Editor / IDE metadata
 *.swp

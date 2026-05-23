@@ -189,18 +189,32 @@ int process_kill(uint32_t pid)
 void process_block(void)
 {
     if (current_process) {
-        current_process->state = PROC_BLOCKED;
+        current_process->state       = PROC_BLOCKED;
+        current_process->wait_reason = WAIT_NONE;
     }
     process_yield();
 }
 
 /* -------------------------------------------------------------------------
- * process_wake / process_wake_all_blocked
+ * process_block_on – suspend with a specific wait reason for targeted wakeup
+ * ---------------------------------------------------------------------- */
+void process_block_on(wait_reason_t reason)
+{
+    if (current_process) {
+        current_process->state       = PROC_BLOCKED;
+        current_process->wait_reason = reason;
+    }
+    process_yield();
+}
+
+/* -------------------------------------------------------------------------
+ * process_wake / process_wake_all_blocked / process_wake_reason
  * ---------------------------------------------------------------------- */
 void process_wake(process_t *p)
 {
     if (p && p->state == PROC_BLOCKED) {
-        p->state = PROC_READY;
+        p->state       = PROC_READY;
+        p->wait_reason = WAIT_NONE;
     }
 }
 
@@ -208,7 +222,19 @@ void process_wake_all_blocked(void)
 {
     for (uint32_t i = 0; i < MAX_PROCESSES; i++) {
         if (process_table[i].state == PROC_BLOCKED) {
-            process_table[i].state = PROC_READY;
+            process_table[i].state       = PROC_READY;
+            process_table[i].wait_reason = WAIT_NONE;
+        }
+    }
+}
+
+void process_wake_reason(wait_reason_t reason)
+{
+    for (uint32_t i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].state == PROC_BLOCKED &&
+            process_table[i].wait_reason == reason) {
+            process_table[i].state       = PROC_READY;
+            process_table[i].wait_reason = WAIT_NONE;
         }
     }
 }

@@ -1,6 +1,7 @@
 #include "isr.h"
 #include "pic.h"
 #include "vga.h"
+#include "process.h"
 
 /* NULL for a freestanding environment */
 #define NULL ((void *)0)
@@ -48,9 +49,41 @@ static const char * const exception_names[] = {
 
 /* -------------------------------------------------------------------------
  * isr_handler – Called for CPU exceptions (vectors 0-19)
+ *
+ * If the exception originated from a user-mode process (CS RPL == 3),
+ * we terminate that process and yield to the next runnable task instead
+ * of halting the entire system.  Kernel-mode faults remain fatal.
  * ---------------------------------------------------------------------- */
 static void isr_handler(registers_t *regs)
 {
+    /*
+     * Check whether the fault occurred in user mode: CS bits 1:0 (RPL) == 3.
+     * If so, kill the offending process and continue running the scheduler.
+     */
+    if ((regs->cs & 0x3u) == 3u && current_process && current_process->is_user) {
+        vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+        vga_puts("\n[FAULT] User process '");
+        vga_puts(current_process->name);
+        vga_puts("' (PID ");
+        vga_print_uint(current_process->pid);
+        vga_puts(") killed: ");
+        if (regs->int_no < 20) {
+            vga_puts(exception_names[regs->int_no]);
+        } else {
+            vga_puts("exception");
+        }
+        vga_puts(" at EIP=");
+        vga_print_hex(regs->eip);
+        vga_putchar('\n');
+        vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+
+        /* Terminate the faulting process and yield to the scheduler */
+        process_exit();
+        /* process_exit never returns */
+        return;
+    }
+
+    /* Kernel-mode fault: unrecoverable – print diagnostics and halt */
     vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
     vga_puts("\n*** KERNEL EXCEPTION ***\n");
     vga_puts("  Vector   : ");
@@ -72,7 +105,7 @@ static void isr_handler(registers_t *regs)
     vga_puts("\n\nSystem halted.\n");
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
 
-    /* Halt – exceptions are not recoverable in our minimal kernel */
+    /* Halt – kernel exceptions are not recoverable */
     __asm__ volatile ("cli; hlt");
     while (1) {}
 }
