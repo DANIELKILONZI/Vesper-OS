@@ -152,8 +152,8 @@ static void kb_push(char c)
         kb_buf[kb_tail] = c;
         kb_tail         = next;
     }
-    /* Wake all processes that blocked waiting for keyboard input */
-    process_wake_all_blocked();
+    /* Wake only processes that blocked waiting for keyboard input */
+    process_wake_reason(WAIT_KEYBOARD);
 }
 
 /* -------------------------------------------------------------------------
@@ -248,7 +248,7 @@ char keyboard_getchar(void)
     /* Yield to other processes while the buffer is empty */
     while (kb_head == kb_tail) {
         if (current_process) {
-            process_block();   /* marks BLOCKED and yields */
+            process_block_on(WAIT_KEYBOARD);   /* targeted wakeup */
         } else {
             __asm__ volatile ("hlt");
         }

@@ -56,7 +56,7 @@ int pipe_write(int id, const void *data, uint32_t len)
 
     /* Wake any readers blocked on this pipe */
     if (written > 0) {
-        process_wake_all_blocked();
+        process_wake_reason(WAIT_PIPE);
     }
 
     return (int)written;
@@ -81,7 +81,7 @@ int pipe_read(int id, void *buf, uint32_t len)
         if (!current_process) {
             return -1;   /* no scheduler: cannot block */
         }
-        process_block();  /* marks BLOCKED and yields; re-checked on wakeup */
+        process_block_on(WAIT_PIPE);  /* targeted wakeup on pipe write */
     }
 
     /* Consume min(len, count) bytes */
@@ -107,5 +107,5 @@ void pipe_close(int id)
     }
     pipes[id].open = 0;
     /* Wake any process that might be blocked in pipe_read */
-    process_wake_all_blocked();
+    process_wake_reason(WAIT_PIPE);
 }

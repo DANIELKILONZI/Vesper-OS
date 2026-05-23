@@ -234,10 +234,21 @@ int fs_write_new(const char *name, const void *data, uint32_t len)
     /*
      * Find a free or matching (overwrite) directory slot.
      * Also track the highest used data LBA to place new data after it.
+     * Additionally, try to reuse space from a deleted file that has enough
+     * sectors to hold the new file (simple space reclamation).
      */
     int      target_slot    = -1;
     int      is_overwrite   = 0;       /* 1 when replacing an existing file */
     uint32_t next_data_lba  = FS_DATA_LBA;
+    uint32_t sectors_needed = (len + ATA_SECTOR_SIZE - 1u) / ATA_SECTOR_SIZE;
+    if (sectors_needed == 0u) {
+        sectors_needed = 1u;   /* always consume at least one sector */
+    }
+
+    /* First pass: find best-fit among deleted entries for space reuse */
+    int      reuse_slot     = -1;
+    uint32_t reuse_lba      = 0u;
+    uint32_t reuse_sectors  = 0xFFFFFFFFu;   /* track best (smallest fit) */
 
     for (uint32_t i = 0; i < FS_MAX_FILES; i++) {
         const fs_dirent_t *e = dir_entry(i);
@@ -254,8 +265,20 @@ int fs_write_new(const char *name, const void *data, uint32_t len)
             if (end > next_data_lba) {
                 next_data_lba = end;
             }
-        } else if (target_slot < 0) {
-            target_slot = (int)i;   /* first free/deleted slot */
+        } else {
+            /* Free or deleted slot */
+            if (target_slot < 0 && !is_overwrite) {
+                target_slot = (int)i;   /* first free/deleted slot */
+            }
+            /* Check if this deleted entry has reusable data space */
+            if (e->flags == 1u && e->start_lba >= FS_DATA_LBA && e->size > 0u) {
+                uint32_t avail = (e->size + ATA_SECTOR_SIZE - 1u) / ATA_SECTOR_SIZE;
+                if (avail >= sectors_needed && avail < reuse_sectors) {
+                    reuse_slot    = (int)i;
+                    reuse_lba     = e->start_lba;
+                    reuse_sectors = avail;
+                }
+            }
         }
     }
 
@@ -263,8 +286,18 @@ int fs_write_new(const char *name, const void *data, uint32_t len)
         return -1;   /* directory full */
     }
 
+    /*
+     * If we found a deleted entry with enough space, reuse its LBA range
+     * instead of always appending.  Use the reuse_slot as the directory entry
+     * unless we already have an overwrite target.
+     */
+    uint32_t write_lba = next_data_lba;   /* default: append at end */
+    if (!is_overwrite && reuse_slot >= 0) {
+        write_lba   = reuse_lba;
+        target_slot = reuse_slot;   /* reuse the directory entry too */
+    }
+
     /* Write the file data sector by sector */
-    uint32_t sectors_needed = (len + ATA_SECTOR_SIZE - 1u) / ATA_SECTOR_SIZE;
     const uint8_t *src = (const uint8_t *)data;
     uint32_t written = 0;
 
@@ -275,7 +308,7 @@ int fs_write_new(const char *name, const void *data, uint32_t len)
             chunk = ATA_SECTOR_SIZE;
         }
         memcpy(sector_buf, src + written, chunk);
-        if (ata_write_sectors(next_data_lba + s, 1, sector_buf) != 0) {
+        if (ata_write_sectors(write_lba + s, 1, sector_buf) != 0) {
             return -1;
         }
         written += chunk;
@@ -286,7 +319,7 @@ int fs_write_new(const char *name, const void *data, uint32_t len)
     memset(e, 0, sizeof(*e));
     strncpy(e->name, name, FS_NAME_MAX);
     e->name[FS_NAME_MAX] = '\0';
-    e->start_lba = next_data_lba;
+    e->start_lba = write_lba;
     e->size      = len;
     e->flags     = 0;
 

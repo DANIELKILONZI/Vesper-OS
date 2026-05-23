@@ -49,6 +49,17 @@ typedef enum {
     PROC_ZOMBIE  = 4,
 } proc_state_t;
 
+/*
+ * Wait reasons – used for targeted wakeups so that only processes blocked
+ * on a specific resource are woken (avoids thundering-herd wake-all).
+ */
+typedef enum {
+    WAIT_NONE     = 0,   /* not waiting                      */
+    WAIT_KEYBOARD = 1,   /* blocked in keyboard_getchar()    */
+    WAIT_PIPE     = 2,   /* blocked in pipe_read()           */
+    WAIT_SLEEP    = 3,   /* blocked in timer_sleep_ms()      */
+} wait_reason_t;
+
 typedef struct process {
     /* ---- fields accessed by process.asm (keep offsets stable) ---- */
     uint32_t      esp;           /* offset  0: saved kernel stack pointer        */
@@ -61,7 +72,8 @@ typedef struct process {
     uint32_t      user_esp;      /* offset 24: ring-3 stack pointer              */
     /* ---- remaining fields (C only) -------------------------------- */
     char          name[32];      /* offset 28                                    */
-    uint8_t       kstack[PROCESS_KSTACK_SIZE];  /* offset 60                    */
+    wait_reason_t wait_reason;   /* why this process is blocked                  */
+    uint8_t       kstack[PROCESS_KSTACK_SIZE];
 } process_t;
 
 /* Pointer to the currently executing process */
@@ -99,11 +111,17 @@ int process_kill(uint32_t pid);
 /* Block the calling process until process_wake() is called for it */
 void process_block(void);
 
+/* Block the calling process with a specific wait reason */
+void process_block_on(wait_reason_t reason);
+
 /* Make a BLOCKED process READY */
 void process_wake(process_t *p);
 
-/* Wake every BLOCKED process (called from keyboard IRQ on keypress) */
+/* Wake every BLOCKED process (legacy; prefer process_wake_reason) */
 void process_wake_all_blocked(void);
+
+/* Wake all processes blocked with the given wait reason */
+void process_wake_reason(wait_reason_t reason);
 
 /* Print a process table summary to the VGA console */
 void process_print_all(void);

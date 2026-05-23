@@ -99,21 +99,23 @@ qemu-system-i386 -drive format=raw,file=build/vesper.img,index=0,media=disk -m 3
 ## Architecture Notes
 
 ### Phase 1 – Bootloader (`bootloader/boot.asm`)
-Runs in 16-bit real mode.  Uses BIOS INT 13h (CHS) to load 32 sectors (16 KB)
-of kernel binary from disk sector 2 into physical address 0x1000.  Sets up a
-flat GDT (null / 4 GB code / 4 GB data), enables protected mode via `CR0.PE`,
-far-jumps to flush the pipeline, sets up the kernel stack at 0x90000, and jumps
-to the kernel.
+Runs in 16-bit real mode.  Uses BIOS INT 13h to load 128 sectors (64 KB)
+of kernel binary from disk sector 1 into physical address 0x1000.  Detects
+available RAM via E820 memory map.  Sets up a flat GDT (null / 4 GB code /
+4 GB data), enables protected mode via `CR0.PE`, far-jumps to flush the
+pipeline, sets up the kernel stack at 0x90000, and jumps to the kernel.
 
 ### Phase 2 – Kernel (`kernel/`)
-* **`kernel_entry.asm`** — first 32-bit code at 0x1000; calls `kernel_main()`.
+* **`kernel_entry.asm`** — first 32-bit code at 0x1000; zeroes BSS, calls `kernel_main()`.
 * **`vga.c`** — direct writes to the VGA text buffer at 0xB8000 (80×25, 16
-  colours, scrolling, backspace, newlines, `vga_print_uint`, `vga_print_hex`).
+  colours, scrolling, backspace, newlines, `vga_printf`).
 * **`kernel.c`** — `kernel_main()` initialises every subsystem in order and
   then enters the interactive shell.
 
 ### Phase 3 – Shell (`kernel/shell.c`)
-A simple read-eval-print loop with a green `vesper>` prompt.
+A read-eval-print loop with a green `vesper>` prompt, command history
+(up/down arrows), and 20+ built-in commands including process management,
+file I/O, and ELF binary execution.
 
 ### Phase 4 – Interrupt Handling
 * **`port_io.h`** — shared `inb`/`outb`/`io_wait` inline helpers.
@@ -123,18 +125,39 @@ A simple read-eval-print loop with a green `vesper>` prompt.
 * **`isr.asm`** — NASM-macro-generated stubs for exceptions 0–19 and IRQs
   0–15; all converge on a single `common_stub` that saves/restores registers
   and calls the C dispatcher.
-* **`isr.c`** — `interrupt_handler()` dispatches CPU exceptions (prints
-  diagnostics and halts) and hardware IRQs (calls the registered driver
-  handler, then sends PIC EOI).
+* **`isr.c`** — `interrupt_handler()` dispatches CPU exceptions (kills the
+  faulting user process or halts if in kernel mode) and hardware IRQs (calls
+  the registered driver handler, then sends PIC EOI).
 
-### Phase 5 – Memory Management (`kernel/kmem.c`)
+### Phase 5 – Memory Management (`kernel/kmem.c`, `kernel/pmm.c`, `kernel/paging.c`)
 A 256 KB static heap (`uint8_t heap_storage[262144]` in BSS) managed by a
 first-fit linked-list allocator.  Each block carries a 12-byte header
 (`size`, `free`, `magic`).  `kfree()` coalesces adjacent free blocks.
-The `meminfo` shell command reports live heap statistics.
+The PMM provides a bitmap-based physical frame allocator (up to 32 MB).
+Paging identity-maps the first 8 MB; user processes get isolated page
+directories.
 
 ### Interrupt-driven Keyboard (`kernel/keyboard.c`)
 The PS/2 driver registers an IRQ1 handler that decodes PS/2 Scancode Set 1
 make/break codes (with Shift tracking) and pushes ASCII characters into a 64-
-byte volatile ring buffer.  `keyboard_getchar()` yields via `HLT` while the
-ring buffer is empty — no hot busy-loop.
+byte volatile ring buffer.  `keyboard_getchar()` blocks via targeted wait-
+reason tagging — only keyboard-waiting processes are woken on keypress.
+
+### Disk & Filesystem
+* **`ata.c`** — polling ATA PIO driver for primary master (28-bit LBA).
+* **`fs.c`** — VesperFS: flat filesystem starting at LBA 129, supports
+  create/read/delete with deleted-space reuse for writes.
+
+### Process Management & Scheduling
+* **`process.c`** / **`process.asm`** — preemptive round-robin scheduler
+  (50 ms timeslice via PIT), per-process kernel stacks, targeted wakeups.
+* **`syscall.c`** — INT 0x80 syscall gate (DPL=3) with user pointer
+  validation to prevent kernel memory corruption from ring-3 code.
+* **`elf.c`** — ELF32 loader for kernel threads and ring-3 user processes.
+
+### Disk Image Layout
+| Sector range | Contents                        |
+|--------------|---------------------------------|
+| 0            | Boot sector (512 B)             |
+| 1–128        | Kernel binary (64 KB budget)    |
+| 129–8191     | VesperFS partition (~4 MB)      |

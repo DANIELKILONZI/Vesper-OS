@@ -101,10 +101,10 @@ clean:
 # -----------------------------------------------------------------------------
 # Disk image assembly
 #
-#  1. Create a blank 1.44 MB floppy-sized image (2880 × 512-byte sectors).
-#  2. Write the 512-byte boot sector to sector 0 (LBA 0  =  CHS 0/0/1).
-#  3. Write the kernel binary starting at sector 1 (LBA 1  =  CHS 0/0/2),
-#     which is where the bootloader's INT 13h call reads from (CL=2).
+#  1. Create a blank 4 MB disk image (8192 × 512-byte sectors).
+#  2. Write the 512-byte boot sector to sector 0 (LBA 0).
+#  3. Write the kernel binary starting at sector 1 (LBA 1),
+#     which is where the bootloader loads from.
 # -----------------------------------------------------------------------------
 $(OS_IMAGE): $(BOOT_BIN) $(KERNEL_BIN) | $(BUILD_DIR)
 	@echo "[IMG]  $@"
