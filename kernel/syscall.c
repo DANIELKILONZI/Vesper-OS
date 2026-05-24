@@ -1,3 +1,4 @@
+#include "elf.h"
 #include "syscall.h"
 #include "idt.h"
 #include "vga.h"
@@ -6,12 +7,52 @@
 #include "process.h"
 #include "pipe.h"
 #include "fd.h"
+#include "paging.h"
 
 /* IDT gate attribute for a DPL=3 interrupt gate (callable from ring 3) */
 #define IDT_SYSCALL_GATE  0xEEu   /* P=1 DPL=3 S=0 Type=1110 (32-bit int gate) */
 
 /* Forward declaration of the ASM stub defined in isr.asm */
 extern void isr_syscall(void);
+
+static int syscall_is_user_context(void)
+{
+    return current_process && current_process->is_user && current_process->pd_phys;
+}
+
+static int syscall_user_buffer_ok(uint32_t ptr, uint32_t len, int write_required)
+{
+    if (!syscall_is_user_context()) {
+        return 1;
+    }
+    return paging_user_range_accessible(current_process->pd_phys, ptr, len,
+                                        write_required);
+}
+
+static int syscall_user_string_ok(uint32_t ptr, uint32_t max_len)
+{
+    if (!syscall_is_user_context()) {
+        return 1;
+    }
+    if (ptr < USER_LOAD_BASE || ptr >= USER_STACK_TOP) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < max_len; i++) {
+        uint32_t addr = ptr + i;
+        if (addr < ptr || addr >= USER_STACK_TOP) {
+            return 0;
+        }
+        if (!paging_user_range_accessible(current_process->pd_phys, addr, 1u, 0)) {
+            return 0;
+        }
+        if (*(const char *)(uintptr_t)addr == '\0') {
+            return 1;
+        }
+    }
+
+    return 0;
+}
 
 void syscall_init(void)
 {
@@ -37,8 +78,7 @@ void syscall_handler(registers_t *regs)
     uint32_t ecx = regs->ecx;
     uint32_t edx = regs->edx;
 
-    /* Default return value: 0 (success) */
-    regs->eax = 0u;
+    regs->eax = SYS_ERR_INVAL;
 
     switch (num) {
 
@@ -58,6 +98,10 @@ void syscall_handler(registers_t *regs)
         {
             const char *buf = (const char *)(uintptr_t)ebx;
             uint32_t    len = ecx;
+            if (!syscall_user_buffer_ok(ebx, len, 0)) {
+                regs->eax = SYS_ERR_FAULT;
+                break;
+            }
             for (uint32_t i = 0; i < len; i++) {
                 vga_putchar(buf[i]);
             }
@@ -75,12 +119,14 @@ void syscall_handler(registers_t *regs)
     case SYS_SLEEP:
         /* Sleep EBX milliseconds */
         timer_sleep_ms(ebx);
+        regs->eax = 0u;
         break;
 
     /* ------------------------------------------------------------------ */
     case SYS_YIELD:
         /* Voluntarily yield the CPU to the next ready process */
         process_yield();
+        regs->eax = 0u;
         break;
 
     /* ------------------------------------------------------------------ */
@@ -89,7 +135,16 @@ void syscall_handler(registers_t *regs)
          * Terminate process with PID EBX.
          * Returns 0 on success, (uint32_t)-1 on failure.
          */
-        regs->eax = (uint32_t)process_kill(ebx);
+        {
+            int rc = process_kill(ebx);
+            if (rc == PROCESS_KILL_ERR_FORBIDDEN) {
+                regs->eax = SYS_ERR_PERM;
+            } else if (rc == PROCESS_KILL_ERR_NOT_FOUND) {
+                regs->eax = SYS_ERR_NOENT;
+            } else {
+                regs->eax = 0u;
+            }
+        }
         break;
 
     /* ------------------------------------------------------------------ */
@@ -101,7 +156,19 @@ void syscall_handler(registers_t *regs)
         {
             const char *name = (const char *)(uintptr_t)ebx;
             uint32_t    pid  = current_process ? current_process->pid : 0u;
-            regs->eax = (uint32_t)fd_open(name, pid);
+            if (!name || !syscall_user_string_ok(ebx, FS_NAME_MAX + 1u)) {
+                regs->eax = SYS_ERR_FAULT;
+                break;
+            }
+
+            int rc = fd_open(name, pid);
+            if (rc == FD_ERR_TABLE_FULL) {
+                regs->eax = SYS_ERR_MFILE;
+            } else if (rc == FD_ERR_NOT_FOUND) {
+                regs->eax = SYS_ERR_NOENT;
+            } else {
+                regs->eax = (uint32_t)rc;
+            }
         }
         break;
 
@@ -117,7 +184,13 @@ void syscall_handler(registers_t *regs)
             uint32_t len = ecx;
             void    *buf = (void *)(uintptr_t)edx;
             uint32_t pid = current_process ? current_process->pid : 0u;
-            regs->eax = (uint32_t)fd_read(fd, buf, len, pid);
+            if (!syscall_user_buffer_ok(edx, len, 1)) {
+                regs->eax = SYS_ERR_FAULT;
+                break;
+            }
+
+            int rc = fd_read(fd, buf, len, pid);
+            regs->eax = (rc == FD_ERR_INVALID) ? SYS_ERR_BADF : (uint32_t)rc;
         }
         break;
 
@@ -126,7 +199,8 @@ void syscall_handler(registers_t *regs)
         /* Close file descriptor EBX */
         {
             uint32_t pid = current_process ? current_process->pid : 0u;
-            fd_close((int)ebx, pid);
+            int rc = fd_close((int)ebx, pid);
+            regs->eax = (rc == 0) ? 0u : SYS_ERR_BADF;
         }
         break;
 
@@ -148,7 +222,10 @@ void syscall_handler(registers_t *regs)
     /* ------------------------------------------------------------------ */
     case SYS_PIPE_CREATE:
         /* Allocate a new pipe; returns pipe_id or (uint32_t)-1 */
-        regs->eax = (uint32_t)pipe_alloc();
+        {
+            int rc = pipe_alloc();
+            regs->eax = (rc >= 0) ? (uint32_t)rc : SYS_ERR_MFILE;
+        }
         break;
 
     /* ------------------------------------------------------------------ */
@@ -161,7 +238,13 @@ void syscall_handler(registers_t *regs)
         {
             int         pipe_id = (int)ebx;
             const void *buf     = (const void *)(uintptr_t)edx;
-            regs->eax = (uint32_t)pipe_write(pipe_id, buf, ecx);
+            if (!syscall_user_buffer_ok(edx, ecx, 0)) {
+                regs->eax = SYS_ERR_FAULT;
+                break;
+            }
+
+            int rc = pipe_write(pipe_id, buf, ecx);
+            regs->eax = (rc >= 0) ? (uint32_t)rc : SYS_ERR_INVAL;
         }
         break;
 
@@ -175,7 +258,13 @@ void syscall_handler(registers_t *regs)
         {
             int   pipe_id = (int)ebx;
             void *buf     = (void *)(uintptr_t)edx;
-            regs->eax = (uint32_t)pipe_read(pipe_id, buf, ecx);
+            if (!syscall_user_buffer_ok(edx, ecx, 1)) {
+                regs->eax = SYS_ERR_FAULT;
+                break;
+            }
+
+            int rc = pipe_read(pipe_id, buf, ecx);
+            regs->eax = (rc >= 0) ? (uint32_t)rc : SYS_ERR_INVAL;
         }
         break;
 
@@ -186,7 +275,7 @@ void syscall_handler(registers_t *regs)
         vga_print_uint(num);
         vga_putchar('\n');
         vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-        regs->eax = (uint32_t)-1;
+        regs->eax = SYS_ERR_NOSYS;
         break;
     }
 }

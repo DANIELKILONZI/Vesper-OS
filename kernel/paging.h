@@ -72,5 +72,13 @@ int paging_alloc_user_pages(uint32_t pd_phys, uint32_t virt_base,
  */
 void paging_destroy_pd(uint32_t pd_phys);
 
-#endif /* PAGING_H */
+/*
+ * paging_user_range_accessible – verify that every page touched by the user
+ * range [virt, virt+len) is mapped in @pd_phys with PAGE_USER set.
+ * When @write_required is non-zero, PAGE_WRITABLE must also be set.
+ * Returns 1 when the full range is accessible, 0 otherwise.
+ */
+int paging_user_range_accessible(uint32_t pd_phys, uint32_t virt, uint32_t len,
+                                 int write_required);
 
+#endif /* PAGING_H */

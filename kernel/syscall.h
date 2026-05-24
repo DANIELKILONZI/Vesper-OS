@@ -48,6 +48,18 @@
 #define SYS_PIPE_WRITE  11u
 #define SYS_PIPE_READ   12u
 
+/* Negative errno-style syscall return codes */
+#define SYS_ERR_PERM    ((uint32_t)-1)
+#define SYS_ERR_NOENT   ((uint32_t)-2)
+#define SYS_ERR_IO      ((uint32_t)-5)
+#define SYS_ERR_NOMEM   ((uint32_t)-12)
+#define SYS_ERR_ACCESS  ((uint32_t)-13)
+#define SYS_ERR_FAULT   ((uint32_t)-14)
+#define SYS_ERR_INVAL   ((uint32_t)-22)
+#define SYS_ERR_NOSYS   ((uint32_t)-38)
+#define SYS_ERR_BADF    ((uint32_t)-9)
+#define SYS_ERR_MFILE   ((uint32_t)-24)
+
 /* Install INT 0x80 in the IDT with DPL=3 */
 void syscall_init(void);
 
