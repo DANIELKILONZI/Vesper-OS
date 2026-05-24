@@ -46,6 +46,7 @@ KERNEL_ENTRY   := $(KERNEL_DIR)/kernel_entry.asm
 KERNEL_C_SRCS  := $(KERNEL_DIR)/kernel.c   \
                   $(KERNEL_DIR)/vga.c       \
                   $(KERNEL_DIR)/keyboard.c  \
+                  $(KERNEL_DIR)/mouse.c     \
                   $(KERNEL_DIR)/shell.c     \
                   $(KERNEL_DIR)/pic.c       \
                   $(KERNEL_DIR)/idt.c       \
@@ -64,7 +65,10 @@ KERNEL_C_SRCS  := $(KERNEL_DIR)/kernel.c   \
                   $(KERNEL_DIR)/elf.c       \
                   $(KERNEL_DIR)/rtc.c       \
                   $(KERNEL_DIR)/pipe.c      \
-                  $(KERNEL_DIR)/fd.c
+                  $(KERNEL_DIR)/fd.c        \
+                  $(KERNEL_DIR)/pci.c       \
+                  $(KERNEL_DIR)/rtl8139.c   \
+                  $(KERNEL_DIR)/net.c
 
 # Object files: kernel_entry.o must come FIRST so it lands at 0x1000
 KERNEL_OBJS := $(BUILD_DIR)/kernel_entry.o  \

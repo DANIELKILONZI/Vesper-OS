@@ -38,6 +38,20 @@ static inline uint16_t inw(uint16_t port)
     return result;
 }
 
+/* Write one 32-bit dword to the given I/O port */
+static inline void outl(uint16_t port, uint32_t value)
+{
+    __asm__ volatile ("outl %0, %1" : : "a"(value), "Nd"(port));
+}
+
+/* Read one 32-bit dword from the given I/O port */
+static inline uint32_t inl(uint16_t port)
+{
+    uint32_t result;
+    __asm__ volatile ("inl %1, %0" : "=a"(result) : "Nd"(port));
+    return result;
+}
+
 /*
  * io_wait – Issue a dummy write to port 0x80 (POST diagnostic port).
  *

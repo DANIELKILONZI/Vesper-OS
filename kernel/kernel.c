@@ -6,6 +6,7 @@
 #include "idt.h"
 #include "pic.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "timer.h"
 #include "rtc.h"
 #include "pmm.h"
@@ -18,11 +19,13 @@
 #include "fd.h"
 #include "ata.h"
 #include "fs.h"
+#include "rtl8139.h"
+#include "net.h"
 
 /* -------------------------------------------------------------------------
  * kernel_main – called by kernel_entry.asm immediately after BSS is zeroed.
  *
- * Initialisation order (Tier 3):
+ * Initialisation order (Tier 4):
  *   1.  vga_init()      – screen
  *   2.  serial_init()   – COM1
  *   3.  kmem_init()     – heap
@@ -32,17 +35,21 @@
  *   7.  idt_init()      – IDT
  *   8.  pic_init()      – PIC remap
  *   9.  timer_init()    – PIT 100 Hz, preemptive slices
- *   10. keyboard_init() – PS/2, extended scancodes
- *   11. pmm_init()      – bitmap PMM
- *   12. paging_init()   – identity-map 0–8 MB, enable CR0.PG
- *   13. syscall_init()  – INT 0x80 (DPL=3, 13 syscalls)
- *   14. pipe_init()     – IPC pipe table
- *   15. fd_init()       – file descriptor table
- *   16. process_init()  – idle process, preemptive scheduler
- *   17. ata_init()      – ATA PIO primary master
- *   18. fs_init()       – VesperFS check
- *   19. sti             – enable hardware interrupts
- *   20. shell_run()     – interactive shell (never returns)
+ *   10. keyboard_init() – PS/2 keyboard (IRQ1)
+ *   11. mouse_init()    – PS/2 mouse (IRQ12)
+ *   12. pmm_init()      – bitmap PMM
+ *   13. paging_init()   – identity-map 0–8 MB, enable CR0.PG
+ *   14. syscall_init()  – INT 0x80 (DPL=3, 13 syscalls)
+ *   15. pipe_init()     – IPC pipe table
+ *   16. fd_init()       – file descriptor table
+ *   17. process_init()  – idle process, preemptive scheduler
+ *   18. ata_init()      – ATA PIO primary master
+ *   19. fs_init()       – VesperFS check
+ *   20. rtl8139_init()  – RTL8139 NIC (optional)
+ *   21. net_init()      – network stack (if NIC present)
+ *   22. sti             – enable hardware interrupts
+ *   23. dhcp_discover() – DHCP lease (if NIC present, max 3 s)
+ *   24. shell_run()     – interactive shell (never returns)
  * ---------------------------------------------------------------------- */
 void kernel_main(void)
 {
@@ -94,6 +101,10 @@ void kernel_main(void)
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts("  [OK] Keyboard driver (IRQ1, extended scancodes)\n");
 
+    mouse_init();
+    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    vga_puts("  [OK] Mouse driver    (IRQ12, PS/2 3-byte packets)\n");
+
     pmm_init();
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts("  [OK] PMM ready       (");
@@ -138,9 +149,39 @@ void kernel_main(void)
         vga_puts("  [--] VesperFS        (not formatted – run 'mkfs')\n");
     }
 
+    int nic_ok = rtl8139_init();
+    if (nic_ok) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("  [OK] RTL8139 NIC     (PCI, IRQ-driven RX, 4-slot TX)\n");
+        net_init();
+        vga_printf("  [OK] Network stack   (MAC %02x:%02x:%02x:%02x:%02x:%02x)\n",
+                   (uint32_t)net_config.mac[0], (uint32_t)net_config.mac[1],
+                   (uint32_t)net_config.mac[2], (uint32_t)net_config.mac[3],
+                   (uint32_t)net_config.mac[4], (uint32_t)net_config.mac[5]);
+    } else {
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("  [--] RTL8139 NIC     (not detected – networking disabled)\n");
+    }
+
     __asm__ volatile ("sti");
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts("  [OK] Interrupts enabled\n");
+
+    if (nic_ok) {
+        vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+        vga_puts("  [..] DHCP discovery  (timeout 3 s)...\n");
+        if (dhcp_discover(300u)) {
+            vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+            vga_printf("  [OK] DHCP lease      (%u.%u.%u.%u)\n",
+                       (net_config.ip >> 24) & 0xFFu,
+                       (net_config.ip >> 16) & 0xFFu,
+                       (net_config.ip >>  8) & 0xFFu,
+                        net_config.ip        & 0xFFu);
+        } else {
+            vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+            vga_puts("  [--] DHCP lease      (no response – use 'dhcp' to retry)\n");
+        }
+    }
 
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
     vga_puts("\n  Type 'help' for available commands.\n\n");
