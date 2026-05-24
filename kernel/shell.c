@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "vga.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "kmem.h"
 #include "port_io.h"
 #include "timer.h"
@@ -11,6 +12,7 @@
 #include "fs.h"
 #include "elf.h"
 #include "rtc.h"
+#include "net.h"
 #include "string.h"
 
 #define NULL ((void *)0)
@@ -66,6 +68,10 @@ static void cmd_help(void)
     vga_puts("  kill <pid>       Terminate a process by PID\n");
     vga_puts("  sleep <ms>       Sleep for N milliseconds\n");
     vga_puts("  colortest        Display all 16 VGA colours\n");
+    vga_puts("  mouse            Show PS/2 mouse position and button state\n");
+    vga_puts("  netinfo          Show network configuration (IP, MAC, gateway)\n");
+    vga_puts("  arp              Show ARP cache (IP-to-MAC mappings)\n");
+    vga_puts("  dhcp             Re-run DHCP discovery to obtain an IP address\n");
     vga_puts("  mkfs             Format the VesperFS partition\n");
     vga_puts("  ls               List files in VesperFS\n");
     vga_puts("  cat <file>       Print file contents\n");
@@ -95,13 +101,14 @@ static void cmd_echo(const char *args)
 static void cmd_version(void)
 {
     vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
-    vga_puts("VESPER OS  v0.5.0\n");
+    vga_puts("VESPER OS  v0.6.0\n");
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
     vga_puts("Architecture   : x86 32-bit Protected Mode\n");
     vga_puts("VGA buffer     : 0xB8000\n");
     vga_puts("Kernel base    : 0x1000\n");
     vga_puts("Interrupt model: IDT + 8259A PIC (IRQ0-15 -> INT 32-47)\n");
     vga_puts("Keyboard       : PS/2 interrupt-driven (IRQ1, extended scancodes)\n");
+    vga_puts("Mouse          : PS/2 interrupt-driven (IRQ12, 3-byte packets)\n");
     vga_puts("Timer          : PIT 100 Hz (IRQ0), preempt every 50 ms\n");
     vga_puts("Memory         : PMM bitmap + 256 KB heap + paging (0-8 MB)\n");
     vga_puts("Scheduler      : preemptive round-robin (50 ms slice)\n");
@@ -113,6 +120,8 @@ static void cmd_version(void)
     vga_puts("Disk           : ATA PIO (primary master)\n");
     vga_puts("Filesystem     : VesperFS (LBA 129+), supports create/read/delete\n");
     vga_puts("ELF loader     : ELF32 (kernel threads + ring-3 user processes)\n");
+    vga_puts("NIC            : RTL8139 (PCI, IRQ-driven RX, polled TX)\n");
+    vga_puts("Network        : Ethernet + ARP + IPv4 + UDP + DHCP client\n");
 }
 
 static void cmd_meminfo(void)
@@ -588,6 +597,97 @@ static void cmd_exec(const char *name)
     process_yield();
 }
 
+static void cmd_mouse(void)
+{
+    mouse_state_t s = mouse_get_state();
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("PS/2 Mouse State:\n");
+    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    vga_puts("  Position : col=");
+    vga_print_uint((uint32_t)(int32_t)s.x);
+    vga_puts("  row=");
+    vga_print_uint((uint32_t)(int32_t)s.y);
+    vga_putchar('\n');
+    vga_puts("  Buttons  : ");
+    vga_puts((s.buttons & 0x01u) ? "LEFT "  : "     ");
+    vga_puts((s.buttons & 0x02u) ? "RIGHT " : "      ");
+    vga_puts((s.buttons & 0x04u) ? "MIDDLE" : "      ");
+    vga_putchar('\n');
+    vga_puts("  Packets  : ");
+    vga_print_uint(s.packets);
+    vga_putchar('\n');
+}
+
+static void cmd_netinfo(void)
+{
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("Network Configuration:\n");
+    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    vga_printf("  MAC      : %02x:%02x:%02x:%02x:%02x:%02x\n",
+               (uint32_t)net_config.mac[0], (uint32_t)net_config.mac[1],
+               (uint32_t)net_config.mac[2], (uint32_t)net_config.mac[3],
+               (uint32_t)net_config.mac[4], (uint32_t)net_config.mac[5]);
+    if (net_config.configured) {
+        vga_printf("  IP       : %u.%u.%u.%u\n",
+                   (net_config.ip      >> 24) & 0xFFu,
+                   (net_config.ip      >> 16) & 0xFFu,
+                   (net_config.ip      >>  8) & 0xFFu,
+                    net_config.ip             & 0xFFu);
+        vga_printf("  Netmask  : %u.%u.%u.%u\n",
+                   (net_config.netmask >> 24) & 0xFFu,
+                   (net_config.netmask >> 16) & 0xFFu,
+                   (net_config.netmask >>  8) & 0xFFu,
+                    net_config.netmask        & 0xFFu);
+        vga_printf("  Gateway  : %u.%u.%u.%u\n",
+                   (net_config.gateway >> 24) & 0xFFu,
+                   (net_config.gateway >> 16) & 0xFFu,
+                   (net_config.gateway >>  8) & 0xFFu,
+                    net_config.gateway        & 0xFFu);
+        vga_printf("  DNS      : %u.%u.%u.%u\n",
+                   (net_config.dns     >> 24) & 0xFFu,
+                   (net_config.dns     >> 16) & 0xFFu,
+                   (net_config.dns     >>  8) & 0xFFu,
+                    net_config.dns            & 0xFFu);
+    } else {
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("  Status   : not configured (no DHCP lease)\n");
+    }
+    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+}
+
+static void cmd_arp(void)
+{
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("ARP Cache:\n");
+    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    net_print_arp_cache();
+}
+
+static void cmd_dhcp(void)
+{
+    if (net_config.mac[0] == 0u && net_config.mac[1] == 0u &&
+        net_config.mac[2] == 0u && net_config.mac[3] == 0u &&
+        net_config.mac[4] == 0u && net_config.mac[5] == 0u) {
+        vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+        vga_puts("No NIC detected. DHCP unavailable.\n");
+        vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+        return;
+    }
+    vga_puts("Running DHCP discovery (timeout 3 s)...\n");
+    if (dhcp_discover(300u)) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_printf("Lease obtained: %u.%u.%u.%u\n",
+                   (net_config.ip >> 24) & 0xFFu,
+                   (net_config.ip >> 16) & 0xFFu,
+                   (net_config.ip >>  8) & 0xFFu,
+                    net_config.ip        & 0xFFu);
+    } else {
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("DHCP timed out - no lease obtained.\n");
+    }
+    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+}
+
 static void cmd_unknown(const char *cmd)
 {
     vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
@@ -745,6 +845,14 @@ static void execute_command(char *cmd)
         vga_puts("Usage: sleep <milliseconds>\n");
     } else if (str_eq(cmd, "colortest")) {
         cmd_colortest();
+    } else if (str_eq(cmd, "mouse")) {
+        cmd_mouse();
+    } else if (str_eq(cmd, "netinfo")) {
+        cmd_netinfo();
+    } else if (str_eq(cmd, "arp")) {
+        cmd_arp();
+    } else if (str_eq(cmd, "dhcp")) {
+        cmd_dhcp();
     } else if (str_eq(cmd, "mkfs")) {
         cmd_mkfs();
     } else if (str_eq(cmd, "ls")) {
