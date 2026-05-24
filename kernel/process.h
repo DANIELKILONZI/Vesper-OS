@@ -41,6 +41,9 @@
 #define PROCESS_KSTACK_SIZE 8192u   /* 8 KB kernel stack per process */
 #define SCHED_SLICE         5u      /* preempt after this many timer ticks (50 ms) */
 
+#define PROCESS_KILL_ERR_NOT_FOUND  (-1)
+#define PROCESS_KILL_ERR_FORBIDDEN  (-2)
+
 typedef enum {
     PROC_UNUSED  = 0,
     PROC_READY   = 1,

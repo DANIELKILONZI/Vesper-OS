@@ -91,5 +91,6 @@ uint32_t elf_load_user(const void *data, uint32_t len, uint32_t pd_phys);
 #define USER_LOAD_BASE   0x01000000u   /* ELF virtual load address  */
 #define USER_STACK_TOP   0x01020000u   /* user stack grows down from here */
 #define USER_STACK_PAGES 4u            /* 16 KB user stack          */
+#define USER_STACK_BASE  (USER_STACK_TOP - USER_STACK_PAGES * 4096u)
 
 #endif /* ELF_H */

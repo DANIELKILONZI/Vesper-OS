@@ -19,6 +19,33 @@
 static uint32_t page_directory[PD_ENTRIES]     __attribute__((aligned(4096)));
 static uint32_t page_tables[2][PT_ENTRIES]     __attribute__((aligned(4096)));
 
+static int paging_page_accessible(uint32_t pd_phys, uint32_t virt,
+                                  int write_required)
+{
+    if (!pd_phys) {
+        return 0;
+    }
+
+    const uint32_t *pd = (const uint32_t *)pd_phys;
+    uint32_t pdi = virt >> 22u;
+    uint32_t pti = (virt >> 12u) & 0x3FFu;
+
+    if (!(pd[pdi] & PAGE_PRESENT) || !(pd[pdi] & PAGE_USER)) {
+        return 0;
+    }
+
+    const uint32_t *pt = (const uint32_t *)(pd[pdi] & ~0xFFFu);
+    uint32_t pte = pt[pti];
+    if (!(pte & PAGE_PRESENT) || !(pte & PAGE_USER)) {
+        return 0;
+    }
+    if (write_required && !(pte & PAGE_WRITABLE)) {
+        return 0;
+    }
+
+    return 1;
+}
+
 void paging_init(void)
 {
     /* Clear page directory (all entries not-present) */
@@ -166,4 +193,32 @@ void paging_destroy_pd(uint32_t pd_phys)
 
     /* Free the page directory frame */
     pmm_free_frame(pd_phys);
+}
+
+int paging_user_range_accessible(uint32_t pd_phys, uint32_t virt, uint32_t len,
+                                 int write_required)
+{
+    if (len == 0u) {
+        return 1;
+    }
+
+    uint32_t end = virt + len - 1u;
+    if (end < virt) {
+        return 0;
+    }
+
+    uint32_t page = virt & ~0xFFFu;
+    uint32_t end_page = end & ~0xFFFu;
+
+    while (1) {
+        if (!paging_page_accessible(pd_phys, page, write_required)) {
+            return 0;
+        }
+        if (page == end_page) {
+            break;
+        }
+        page += PAGE_SIZE;
+    }
+
+    return 1;
 }

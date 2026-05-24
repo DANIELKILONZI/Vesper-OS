@@ -1,4 +1,5 @@
 #include "process.h"
+#include "fd.h"
 #include "paging.h"
 #include "tss.h"
 #include "string.h"
@@ -12,6 +13,23 @@
 process_t  *current_process               = NULL;
 static process_t  process_table[MAX_PROCESSES];
 static uint32_t   next_pid = 0;
+
+static void process_reap_zombies(void)
+{
+    for (uint32_t i = 0; i < MAX_PROCESSES; i++) {
+        process_t *p = &process_table[i];
+        if (p == current_process || p->state != PROC_ZOMBIE) {
+            continue;
+        }
+
+        fd_close_all_for_pid(p->pid);
+        if (p->pd_phys) {
+            paging_destroy_pd(p->pd_phys);
+        }
+        memset(p, 0, sizeof(*p));
+        p->state = PROC_UNUSED;
+    }
+}
 
 /* -------------------------------------------------------------------------
  * Idle process – runs when every other process is blocked or zombie.
@@ -47,6 +65,8 @@ void process_init(void)
  * ---------------------------------------------------------------------- */
 static process_t *alloc_slot(void)
 {
+    process_reap_zombies();
+
     for (uint32_t i = 0; i < MAX_PROCESSES; i++) {
         if (process_table[i].state == PROC_UNUSED) {
             return &process_table[i];
@@ -151,11 +171,6 @@ void process_before_switch(process_t *next)
 void process_exit(void)
 {
     if (current_process) {
-        /* Free the process's page directory if it owns one */
-        if (current_process->pd_phys) {
-            paging_destroy_pd(current_process->pd_phys);
-            current_process->pd_phys = 0u;
-        }
         current_process->state = PROC_ZOMBIE;
     }
     process_yield();
@@ -168,19 +183,20 @@ void process_exit(void)
 int process_kill(uint32_t pid)
 {
     for (uint32_t i = 0; i < MAX_PROCESSES; i++) {
+        if (i == 0u && process_table[i].pid == pid) {
+            return PROCESS_KILL_ERR_FORBIDDEN;
+        }
         if (process_table[i].pid == pid &&
             process_table[i].state != PROC_UNUSED &&
             process_table[i].state != PROC_ZOMBIE) {
-
-            if (process_table[i].pd_phys) {
-                paging_destroy_pd(process_table[i].pd_phys);
-                process_table[i].pd_phys = 0u;
+            if (&process_table[i] == current_process) {
+                process_exit();
             }
             process_table[i].state = PROC_ZOMBIE;
             return 0;
         }
     }
-    return -1;
+    return PROCESS_KILL_ERR_NOT_FOUND;
 }
 
 /* -------------------------------------------------------------------------
@@ -219,6 +235,8 @@ void process_wake_all_blocked(void)
  * ---------------------------------------------------------------------- */
 process_t *sched_next(void)
 {
+    process_reap_zombies();
+
     if (!current_process) {
         /* Bootstrap: return the first ready process */
         for (uint32_t i = 0; i < MAX_PROCESSES; i++) {

@@ -1,18 +1,13 @@
 #include "elf.h"
+#include "paging.h"
 #include "string.h"
 
-/* -------------------------------------------------------------------------
- * elf_load – load an ELF32 executable from a memory buffer
- * ---------------------------------------------------------------------- */
-uint32_t elf_load(const void *data, uint32_t len)
+static int elf_header_valid(const elf32_ehdr_t *eh, uint32_t len)
 {
-    if (!data || len < sizeof(elf32_ehdr_t)) {
+    if (!eh || len < sizeof(elf32_ehdr_t)) {
         return 0;
     }
 
-    const elf32_ehdr_t *eh = (const elf32_ehdr_t *)data;
-
-    /* Validate ELF magic */
     if (eh->e_ident[0] != ELF_MAGIC0 ||
         eh->e_ident[1] != ELF_MAGIC1 ||
         eh->e_ident[2] != ELF_MAGIC2 ||
@@ -20,7 +15,6 @@ uint32_t elf_load(const void *data, uint32_t len)
         return 0;
     }
 
-    /* Must be 32-bit, little-endian, executable, i386 */
     if (eh->e_ident[4] != ELF_CLASS32  ||
         eh->e_ident[5] != ELF_DATA2LSB ||
         eh->e_type      != ELF_ET_EXEC  ||
@@ -28,12 +22,59 @@ uint32_t elf_load(const void *data, uint32_t len)
         return 0;
     }
 
-    if (eh->e_phoff == 0 || eh->e_phnum == 0) {
-        return 0;   /* no program headers */
+    if (eh->e_ehsize != sizeof(elf32_ehdr_t) ||
+        eh->e_phentsize != sizeof(elf32_phdr_t) ||
+        eh->e_phoff == 0u || eh->e_phnum == 0u) {
+        return 0;
     }
 
-    /* Bounds-check the program-header table */
-    if (eh->e_phoff + (uint32_t)eh->e_phnum * sizeof(elf32_phdr_t) > len) {
+    uint32_t ph_bytes = (uint32_t)eh->e_phnum * eh->e_phentsize;
+    if (ph_bytes / eh->e_phentsize != (uint32_t)eh->e_phnum) {
+        return 0;
+    }
+    if (eh->e_phoff > len || ph_bytes > len - eh->e_phoff) {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int elf_segment_in_file(const elf32_phdr_t *ph, uint32_t len)
+{
+    if (ph->p_memsz < ph->p_filesz) {
+        return 0;
+    }
+    if (ph->p_offset > len || ph->p_filesz > len - ph->p_offset) {
+        return 0;
+    }
+    return 1;
+}
+
+static int user_range_valid(uint32_t start, uint32_t size)
+{
+    if (size == 0u || start < USER_LOAD_BASE || start >= USER_STACK_BASE) {
+        return 0;
+    }
+
+    uint32_t end = start + size;
+    if (end < start || end > USER_STACK_BASE) {
+        return 0;
+    }
+
+    return 1;
+}
+
+/* -------------------------------------------------------------------------
+ * elf_load – load an ELF32 executable from a memory buffer
+ * ---------------------------------------------------------------------- */
+uint32_t elf_load(const void *data, uint32_t len)
+{
+    if (!data) {
+        return 0;
+    }
+
+    const elf32_ehdr_t *eh = (const elf32_ehdr_t *)data;
+    if (!elf_header_valid(eh, len)) {
         return 0;
     }
 
@@ -47,21 +88,16 @@ uint32_t elf_load(const void *data, uint32_t len)
         if (ph->p_type != ELF_PT_LOAD) {
             continue;
         }
-        if (ph->p_filesz == 0) {
-            continue;
-        }
-
-        /* Bounds-check the segment data in the file */
-        if (ph->p_offset + ph->p_filesz > len) {
+        if (!elf_segment_in_file(ph, len)) {
             return 0;
         }
 
-        /* Copy file bytes to virtual address */
-        memcpy((void *)ph->p_vaddr,
-               base + ph->p_offset,
-               ph->p_filesz);
+        if (ph->p_filesz > 0u) {
+            memcpy((void *)ph->p_vaddr,
+                   base + ph->p_offset,
+                   ph->p_filesz);
+        }
 
-        /* Zero the BSS portion of the segment (memsz > filesz) */
         if (ph->p_memsz > ph->p_filesz) {
             memset((void *)(ph->p_vaddr + ph->p_filesz),
                    0,
@@ -75,8 +111,6 @@ uint32_t elf_load(const void *data, uint32_t len)
 /* -------------------------------------------------------------------------
  * elf_load_user – load ELF segments into a user-mode page directory
  * ---------------------------------------------------------------------- */
-#include "paging.h"
-
 /* Look up the physical frame address for a virtual page in a given PD.
  * The PD and its page tables are in the identity-mapped 0-8 MB region,
  * so we can access them directly by physical address.
@@ -100,29 +134,18 @@ static uint32_t phys_of_virt(uint32_t pd_phys, uint32_t virt)
 
 uint32_t elf_load_user(const void *data, uint32_t len, uint32_t pd_phys)
 {
-    if (!data || len < sizeof(elf32_ehdr_t) || !pd_phys) {
+    if (!data || !pd_phys) {
         return 0u;
     }
 
     const elf32_ehdr_t *eh = (const elf32_ehdr_t *)data;
-
-    /* Validate ELF header */
-    if (eh->e_ident[0] != ELF_MAGIC0 || eh->e_ident[1] != ELF_MAGIC1 ||
-        eh->e_ident[2] != ELF_MAGIC2 || eh->e_ident[3] != ELF_MAGIC3) {
-        return 0u;
-    }
-    if (eh->e_ident[4] != ELF_CLASS32  || eh->e_ident[5] != ELF_DATA2LSB ||
-        eh->e_type      != ELF_ET_EXEC  || eh->e_machine   != ELF_EM_386) {
-        return 0u;
-    }
-    if (eh->e_phoff == 0u || eh->e_phnum == 0u) {
-        return 0u;
-    }
-    if (eh->e_phoff + (uint32_t)eh->e_phnum * sizeof(elf32_phdr_t) > len) {
+    if (!elf_header_valid(eh, len) ||
+        eh->e_entry < USER_LOAD_BASE || eh->e_entry >= USER_STACK_BASE) {
         return 0u;
     }
 
     const uint8_t *base = (const uint8_t *)data;
+    int entry_covered = 0;
 
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         const elf32_phdr_t *ph =
@@ -132,8 +155,14 @@ uint32_t elf_load_user(const void *data, uint32_t len, uint32_t pd_phys)
         if (ph->p_type != ELF_PT_LOAD || ph->p_memsz == 0u) {
             continue;
         }
-        if (ph->p_offset + ph->p_filesz > len) {
+        if (!elf_segment_in_file(ph, len) ||
+            !user_range_valid(ph->p_vaddr, ph->p_memsz)) {
             return 0u;
+        }
+
+        if (eh->e_entry >= ph->p_vaddr &&
+            eh->e_entry < ph->p_vaddr + ph->p_memsz) {
+            entry_covered = 1;
         }
 
         /* Page-align the virtual range */
@@ -182,6 +211,10 @@ uint32_t elf_load_user(const void *data, uint32_t len, uint32_t pd_phys)
 
             memcpy(dst + dst_off, base + src_off, copy_len);
         }
+    }
+
+    if (!entry_covered) {
+        return 0u;
     }
 
     return eh->e_entry;

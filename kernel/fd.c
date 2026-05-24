@@ -31,11 +31,11 @@ int fd_open(const char *name, uint32_t pid)
         }
     }
     if (slot < 0) {
-        return -1;   /* descriptor table full */
+        return FD_ERR_TABLE_FULL;
     }
 
     if (fs_open(&fd_table[slot].file, name) != 0) {
-        return -1;   /* file not found */
+        return FD_ERR_NOT_FOUND;
     }
 
     fd_table[slot].pid  = pid;
@@ -49,11 +49,11 @@ int fd_open(const char *name, uint32_t pid)
 int fd_read(int fd, void *buf, uint32_t len, uint32_t pid)
 {
     if (fd < 0 || (uint32_t)fd >= FD_MAX) {
-        return -1;
+        return FD_ERR_INVALID;
     }
     fd_entry_t *e = &fd_table[fd];
     if (!e->used || e->pid != pid) {
-        return -1;
+        return FD_ERR_INVALID;
     }
     uint32_t n = fs_read(&e->file, buf, len);
     return (int)n;
@@ -62,16 +62,28 @@ int fd_read(int fd, void *buf, uint32_t len, uint32_t pid)
 /* -------------------------------------------------------------------------
  * fd_close – release a file descriptor
  * ---------------------------------------------------------------------- */
-void fd_close(int fd, uint32_t pid)
+int fd_close(int fd, uint32_t pid)
 {
     if (fd < 0 || (uint32_t)fd >= FD_MAX) {
-        return;
+        return FD_ERR_INVALID;
     }
     fd_entry_t *e = &fd_table[fd];
     if (!e->used || e->pid != pid) {
-        return;
+        return FD_ERR_INVALID;
     }
     fs_close(&e->file);
     e->used = 0;
     e->pid  = 0;
+    return 0;
+}
+
+void fd_close_all_for_pid(uint32_t pid)
+{
+    for (uint32_t i = 0; i < FD_MAX; i++) {
+        if (fd_table[i].used && fd_table[i].pid == pid) {
+            fs_close(&fd_table[i].file);
+            fd_table[i].used = 0;
+            fd_table[i].pid  = 0;
+        }
+    }
 }

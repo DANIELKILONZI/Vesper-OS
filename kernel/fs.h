@@ -31,6 +31,7 @@
 #define FS_DIR_SECTORS    8u
 #define FS_MAX_FILES      64u    /* (FS_DIR_SECTORS * 512) / sizeof(fs_dirent_t) */
 #define FS_NAME_MAX       31u    /* max name length (+ NUL) */
+#define FS_MAX_LBA_EXCL   8192u  /* disk image size in sectors */
 
 /* Directory entry as stored on disk */
 typedef struct {

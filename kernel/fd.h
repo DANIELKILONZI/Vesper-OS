@@ -21,6 +21,10 @@
 
 #define FD_MAX   16u   /* max simultaneously open files system-wide */
 
+#define FD_ERR_NOT_FOUND   (-1)
+#define FD_ERR_TABLE_FULL  (-2)
+#define FD_ERR_INVALID     (-3)
+
 /* Initialise the file descriptor table (call once from kernel_main) */
 void fd_init(void);
 
@@ -43,6 +47,9 @@ int fd_read(int fd, void *buf, uint32_t len, uint32_t pid);
  * fd_close – release a file descriptor.
  * @pid : must match the pid that opened this fd.
  */
-void fd_close(int fd, uint32_t pid);
+int fd_close(int fd, uint32_t pid);
+
+/* Close every descriptor owned by @pid. */
+void fd_close_all_for_pid(uint32_t pid);
 
 #endif /* FD_H */
