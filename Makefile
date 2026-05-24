@@ -86,7 +86,7 @@ OS_IMAGE  := $(BUILD_DIR)/vesper.img
 # -----------------------------------------------------------------------------
 # Phony targets
 # -----------------------------------------------------------------------------
-.PHONY: all run clean
+.PHONY: all run run-debug smoke clean
 
 all: $(OS_IMAGE)
 
@@ -98,6 +98,29 @@ run: $(OS_IMAGE)
 run-debug: $(OS_IMAGE)
 	qemu-system-i386 -drive format=raw,file=$(OS_IMAGE),index=0,media=disk \
 	                 -m 32M -serial file:/dev/null -monitor stdio
+
+# Headless boot smoke test (serial markers for mouse + NIC + DHCP)
+smoke: $(OS_IMAGE)
+	@echo "[SMOKE] Booting QEMU (RTL8139 + usernet DHCP)..."
+	@rm -f $(BUILD_DIR)/smoke.log
+	@set +e; \
+	timeout 12s qemu-system-i386 -drive format=raw,file=$(OS_IMAGE),index=0,media=disk \
+	                             -m 32M -nographic -monitor none \
+	                             -serial file:$(BUILD_DIR)/smoke.log \
+	                             -netdev user,id=net0 -device rtl8139,netdev=net0; \
+	rc=$$?; set -e; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then exit $$rc; fi
+	@grep -q "VESPER: serial console active (115200 8N1)" $(BUILD_DIR)/smoke.log || \
+		(echo "[SMOKE] Missing serial init marker"; cat $(BUILD_DIR)/smoke.log; exit 1)
+	@grep -q "VESPER: mouse driver initialized" $(BUILD_DIR)/smoke.log || \
+		(echo "[SMOKE] Missing mouse init marker"; cat $(BUILD_DIR)/smoke.log; exit 1)
+	@grep -q "VESPER: rtl8139 detected" $(BUILD_DIR)/smoke.log || \
+		(echo "[SMOKE] Missing NIC detection marker"; cat $(BUILD_DIR)/smoke.log; exit 1)
+	@grep -q "VESPER: dhcp discovery start" $(BUILD_DIR)/smoke.log || \
+		(echo "[SMOKE] Missing DHCP start marker"; cat $(BUILD_DIR)/smoke.log; exit 1)
+	@grep -Eq "VESPER: dhcp lease acquired|VESPER: dhcp lease timeout" $(BUILD_DIR)/smoke.log || \
+		(echo "[SMOKE] Missing DHCP outcome marker"; cat $(BUILD_DIR)/smoke.log; exit 1)
+	@echo "[SMOKE] PASS"
 
 clean:
 	rm -rf $(BUILD_DIR)

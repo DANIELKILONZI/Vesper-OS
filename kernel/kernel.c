@@ -104,6 +104,7 @@ void kernel_main(void)
     mouse_init();
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts("  [OK] Mouse driver    (IRQ12, PS/2 3-byte packets)\n");
+    serial_puts("VESPER: mouse driver initialized\n");
 
     pmm_init();
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
@@ -153,14 +154,17 @@ void kernel_main(void)
     if (nic_ok) {
         vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
         vga_puts("  [OK] RTL8139 NIC     (PCI, IRQ-driven RX, 4-slot TX)\n");
+        serial_puts("VESPER: rtl8139 detected\n");
         net_init();
         vga_printf("  [OK] Network stack   (MAC %02x:%02x:%02x:%02x:%02x:%02x)\n",
                    (uint32_t)net_config.mac[0], (uint32_t)net_config.mac[1],
                    (uint32_t)net_config.mac[2], (uint32_t)net_config.mac[3],
                    (uint32_t)net_config.mac[4], (uint32_t)net_config.mac[5]);
+        serial_puts("VESPER: network stack initialized\n");
     } else {
         vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
         vga_puts("  [--] RTL8139 NIC     (not detected – networking disabled)\n");
+        serial_puts("VESPER: rtl8139 not detected\n");
     }
 
     __asm__ volatile ("sti");
@@ -170,6 +174,7 @@ void kernel_main(void)
     if (nic_ok) {
         vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
         vga_puts("  [..] DHCP discovery  (timeout 3 s)...\n");
+        serial_puts("VESPER: dhcp discovery start\n");
         if (dhcp_discover(300u)) {
             vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
             vga_printf("  [OK] DHCP lease      (%u.%u.%u.%u)\n",
@@ -177,9 +182,11 @@ void kernel_main(void)
                        (net_config.ip >> 16) & 0xFFu,
                        (net_config.ip >>  8) & 0xFFu,
                         net_config.ip        & 0xFFu);
+            serial_puts("VESPER: dhcp lease acquired\n");
         } else {
             vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
             vga_puts("  [--] DHCP lease      (no response – use 'dhcp' to retry)\n");
+            serial_puts("VESPER: dhcp lease timeout\n");
         }
     }
 
